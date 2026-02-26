@@ -1,70 +1,93 @@
-import { createEmbedding } from './embedding.service.js'
-import { vectorSearch } from './vector.service.js'
-import { openai } from '../config/openai.js'
-import { logger } from '../utils/logger.util.js'
-import Document from '../models/document.model.js'
-import { collection } from '../config/db.js'
+import { createEmbedding } from "./embedding.service.js";
+import { vectorSearch } from "./vector.service.js";
+import { openai } from "../config/openai.js";
+import { logger } from "../utils/logger.util.js";
+import Document from "../models/document.model.js";
+import Chat from "../models/chat.model.js";
 
-export async function storeDocument (chunk, embedding, source) {
+export async function storeDocument(chunk, embedding, source) {
   try {
     const doc = new Document({
       text: chunk,
       embedding,
-      source
-    })
+      source,
+    });
 
-    await collection.insertOne(doc)
+    await doc.save();
   } catch (error) {
-    logger.error('Document store failed', error)
+    logger.error("Document store failed", error);
 
-    throw error
+    throw error;
   }
 }
 
-export async function askQuestion (question) {
+export async function askQuestion(question, sessionId) {
   try {
-    logger.info('Question received', question)
+    logger.info("Question received");
 
-    const embedding = await createEmbedding(question)
+    // 1. Create embedding
+    const embedding = await createEmbedding(question);
 
-    const results = await vectorSearch(embedding, 5)
+    // 2. Vector search
+    const results = await vectorSearch(embedding, 5);
 
-    if (!results.length) {
-      logger.warn('No vector matches found')
+    const context = results.map((r) => r.text).join("\n");
 
-      return 'No relevant information found.'
-    }
+    // 3. Load chat memory
+    const previousChats = await Chat.find({ sessionId })
+      .sort({ createdAt: 1 })
+      .limit(10);
 
-    const context = results.map(r => r.text).join('\n')
+    const memoryMessages = previousChats.map((chat) => ({
+      role: chat.role,
+      content: chat.content,
+    }));
 
-    logger.info('Context retrieved')
+    // 4. Prepare messages
+    const messages = [
+      {
+        role: "system",
+        content: "Answer using only provided context",
+      },
 
+      {
+        role: "system",
+        content: `Context:\n${context}`,
+      },
+
+      ...memoryMessages,
+
+      {
+        role: "user",
+        content: question,
+      },
+    ];
+
+    // 5. Call LLM
     const completion = await openai.chat.completions.create({
-      model: 'openai/gpt-4o-mini',
+      model: "openai/gpt-4o-mini",
+      messages,
+    });
 
-      messages: [
-        {
-          role: 'system',
-          content: 'Answer using only the provided context'
-        },
+    const answer = completion.choices[0].message.content;
 
-        {
-          role: 'user',
-          content: `Context:
-${context}
+    // 6. Save user message
+    await Chat.create({
+      sessionId,
+      role: "user",
+      content: question,
+    });
 
-Question:
-${question}`
-        }
-      ]
-    })
+    // 7. Save assistant reply
+    await Chat.create({
+      sessionId,
+      role: "assistant",
+      content: answer,
+    });
 
-    logger.info('LLM response generated')
-
-    return completion.choices[0].message.content
+    return answer;
   } catch (error) {
-    logger.error('Ask question failed', error)
-
-    throw error
+    logger.error(error);
+    throw error;
   }
 }

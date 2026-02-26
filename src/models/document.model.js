@@ -1,19 +1,26 @@
-export default class Document {
-  constructor ({
-    text,
+import mongoose from 'mongoose';
 
-    embedding,
+const documentSchema = new mongoose.Schema(
+  {
+    text: {
+      type: String,
+      required: true,
+    },
 
-    source,
+    // embeddings are stored as arrays of numbers
+    embedding: {
+      type: [Number],
+      required: true,
+    },
 
-    createdAt = new Date()
-  }) {
-    this.text = text
-
-    this.embedding = embedding
-
-    this.source = source
-
-    this.createdAt = createdAt
+    source: {
+      type: String,
+    },
+  },
+  {
+    timestamps: { createdAt: 'createdAt', updatedAt: false },
   }
-}
+);
+
+// export the model so callers can create/save documents in the usual way
+export default mongoose.model('Document', documentSchema);

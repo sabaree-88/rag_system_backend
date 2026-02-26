@@ -1,12 +1,14 @@
-import { MongoClient } from 'mongodb'
-import { MONGODB_URI } from './env.js'
+import mongoose from "mongoose";
+import { MONGODB_URI } from "./env.js";
 
-const client = new MongoClient(MONGODB_URI)
+const connectDB = async () => {
+  try {
+    await mongoose.connect(MONGODB_URI);
+    console.log("MongoDB Connected...");
+  } catch (err) {
+    console.error(err.message);
+    process.exit(1);
+  }
+};
 
-await client.connect()
-
-console.log('MongoDB connected')
-
-export const db = client.db('rag_db')
-
-export const collection = db.collection('documents')
+export default connectDB;

@@ -2,7 +2,7 @@ import { chunkText } from '../utils/chunk.util.js'
 
 import { createEmbedding } from '../services/embedding.service.js'
 
-import { collection } from '../config/db.js'
+import Document from '../models/document.model.js'
 
 import { logger } from '../utils/logger.util.js'
 
@@ -15,14 +15,11 @@ export async function runEmbeddingJob (text, source) {
     for (const chunk of chunks) {
       const embedding = await createEmbedding(chunk)
 
-      await collection.insertOne({
+      // create and save via mongoose model for validation
+      await Document.create({
         text: chunk,
-
         embedding,
-
         source,
-
-        createdAt: new Date()
       })
     }
 
