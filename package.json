@@ -1,0 +1,25 @@
+{
+  "name": "genai",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "node src/server.js",
+    "start": "nodemon src/server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "gpt-tokenizer": "^3.4.0",
+    "mongodb": "^7.1.0",
+    "multer": "^2.0.2",
+    "nodemon": "^3.1.14",
+    "openai": "^6.25.0",
+    "pdf-parse": "^2.4.5"
+  }
+}
