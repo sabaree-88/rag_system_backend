@@ -1,9 +1,11 @@
-import express from 'express'
+import express from "express";
 
-import { ask } from '../controllers/ask.controller.js'
+import { ask, askStream } from "../controllers/ask.controller.js";
 
-const router = express.Router()
+const router = express.Router();
 
-router.post('/ask', ask)
+router.post("/ask", ask);
 
-export default router
+router.post("/ask-stream", askStream);
+
+export default router;

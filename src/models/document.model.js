@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
 const documentSchema = new mongoose.Schema(
   {
@@ -16,11 +16,17 @@ const documentSchema = new mongoose.Schema(
     source: {
       type: String,
     },
+
+    category: {
+      type: String,
+    },
   },
   {
-    timestamps: { createdAt: 'createdAt', updatedAt: false },
-  }
+    timestamps: { createdAt: "createdAt", updatedAt: false },
+  },
 );
 
 // export the model so callers can create/save documents in the usual way
-export default mongoose.model('Document', documentSchema);
+const Document = mongoose.model("Document", documentSchema);
+
+export default Document;
