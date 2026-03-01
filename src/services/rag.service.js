@@ -4,6 +4,8 @@ import { openai } from "../config/openai.js";
 import { logger } from "../utils/logger.util.js";
 import Document from "../models/document.model.js";
 import Chat from "../models/chat.model.js";
+import { rewriteQuery } from "./queryRewriter.service.js";
+import { extractJSONArray } from "../utils/extract.util.js";
 
 export async function storeDocument(chunk, embedding, source) {
   try {
@@ -26,19 +28,45 @@ export async function askQuestion(question, sessionId) {
     logger.info("Question received");
 
     // 1. Create embedding
-    const embedding = await createEmbedding(question);
+    // const embedding = await createEmbedding(question);
 
     // 2. Vector search
     // const results = await vectorSearch(embedding, 5);
 
     // For hybrid search, we can also do a text search and combine results
-    const results = await hybridSearch(question, embedding, 5);
+    // const results = await hybridSearch(question, embedding, 5);
 
-    if (!results.length) {
+    // 1️⃣ Generate query variations
+    const queries = await rewriteQuery(question);
+
+    // 2️⃣ Run searches in parallel
+    const allResults = await Promise.all(
+      queries.map(async (q) => {
+        const embedding = await createEmbedding(q);
+        return hybridSearch(q, embedding, 5);
+      }),
+    );
+
+    // 3️⃣ Flatten results
+    const combined = allResults.flat();
+
+    // 4️⃣ Deduplicate by text
+    const uniqueMap = new Map();
+
+    for (const doc of combined) {
+      if (!uniqueMap.has(doc.text)) {
+        uniqueMap.set(doc.text, doc);
+      }
+    }
+
+    const uniqueResults = Array.from(uniqueMap.values());
+
+
+    if (!uniqueResults.length) {
       return "No relevant information found.";
     }
 
-    const reranked = await reRankChunks(question, results);
+    const reranked = await reRankChunks(question, uniqueResults);
 
     // Select Top 3 most relevant
     const topChunks = reranked.slice(0, 3);
@@ -173,19 +201,21 @@ export async function askQuestionStream(question, sessionId, res) {
   }
 }
 
-async function reRankChunks(question, chunks) {
+export async function reRankChunks(question, chunks) {
   try {
+    if (!chunks?.length) return chunks;
+
     const formattedChunks = chunks
-      .map((c, i) => `Chunk ${i + 1}:\n${c.text}`)
+      .map((c, i) => `Chunk ${i + 1}:\n${c.text.slice(0, 1500)}`)
       .join("\n\n");
 
     const prompt = `
 You are a ranking system.
 
-Given the question and document chunks,
-rank the chunks based on relevance to the question.
+Rank the document chunks by relevance to the question.
 
-Return ONLY a JSON array of chunk numbers in order of relevance.
+Return ONLY a JSON array of chunk numbers in descending relevance.
+Example: [3,1,2]
 
 Question:
 ${question}
@@ -197,21 +227,41 @@ ${formattedChunks}
     const response = await openai.chat.completions.create({
       model: "openai/gpt-4o-mini",
       messages: [
-        { role: "system", content: "You are a ranking assistant." },
+        {
+          role: "system",
+          content: "You rank document chunks. Return only JSON array.",
+        },
         { role: "user", content: prompt },
       ],
+      temperature: 0,
     });
 
     const content = response.choices[0].message.content;
 
-    // Example output: [3,1,2,5,4]
-    const order = JSON.parse(content);
+    const order = extractJSONArray(content);
 
-    const rankedChunks = order.map((index) => chunks[index - 1]);
+    if (!order) {
+      throw new Error("No valid JSON array returned");
+    }
+
+    // Validate indices
+    const validOrder = order.filter(
+      (index) =>
+        Number.isInteger(index) && index >= 1 && index <= chunks.length,
+    );
+
+    if (!validOrder.length) {
+      throw new Error("No valid indices in ranking output");
+    }
+
+    const rankedChunks = validOrder.map((index) => chunks[index - 1]);
 
     return rankedChunks;
   } catch (error) {
-    console.error("Re-ranking failed, fallback to original order");
+    console.error(
+      "Re-ranking failed, fallback to original order:",
+      error.message,
+    );
     return chunks;
   }
 }
