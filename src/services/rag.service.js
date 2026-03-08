@@ -1,27 +1,11 @@
 import { createEmbedding } from "./embedding.service.js";
 import { hybridSearch, vectorSearch } from "./vector.service.js";
 import { openai } from "../config/openai.js";
-import { logger } from "../utils/logger.util.js";
-import Document from "../models/document.model.js";
 import Chat from "../models/chat.model.js";
 import { rewriteQuery } from "./queryRewriter.service.js";
-import { extractJSONArray } from "../utils/extract.util.js";
-
-export async function storeDocument(chunk, embedding, source) {
-  try {
-    const doc = new Document({
-      text: chunk,
-      embedding,
-      source,
-    });
-
-    await doc.save();
-  } catch (error) {
-    logger.error("Document store failed", error);
-
-    throw error;
-  }
-}
+import { classifyQuery } from "../utils/query.util.js";
+import { compressChunks, orderContextChunks } from "../utils/chunk.util.js";
+import { reRankChunks } from "./ranking.service.js";
 
 export async function askQuestion(question, sessionId) {
   try {
@@ -181,6 +165,7 @@ export async function askQuestion(question, sessionId) {
     const completion = await openai.chat.completions.create({
       model,
       messages,
+      stream: true,
     });
 
     const answer = completion.choices[0].message.content;
@@ -274,155 +259,4 @@ export async function askQuestionStream(question, sessionId, res) {
     res.end();
     throw error;
   }
-}
-
-export async function reRankChunks(question, chunks) {
-  try {
-    if (!chunks?.length) return chunks;
-
-    const formattedChunks = chunks
-      .map((c, i) => `Chunk ${i + 1}:\n${c.text.slice(0, 1500)}`)
-      .join("\n\n");
-
-    const prompt = `
-You are a ranking system.
-
-Rank the document chunks by relevance to the question.
-
-Return ONLY a JSON array of chunk numbers in descending relevance.
-Example: [3,1,2]
-
-Question:
-${question}
-
-Chunks:
-${formattedChunks}
-`;
-
-    const response = await openai.chat.completions.create({
-      model: "openai/gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content: "You rank document chunks. Return only JSON array.",
-        },
-        { role: "user", content: prompt },
-      ],
-      temperature: 0,
-    });
-
-    const content = response.choices[0].message.content;
-
-    const order = extractJSONArray(content);
-
-    if (!order) {
-      throw new Error("No valid JSON array returned");
-    }
-
-    // Validate indices
-    const validOrder = order.filter(
-      (index) =>
-        Number.isInteger(index) && index >= 1 && index <= chunks.length,
-    );
-
-    if (!validOrder.length) {
-      throw new Error("No valid indices in ranking output");
-    }
-
-    const rankedChunks = validOrder.map((index) => chunks[index - 1]);
-
-    return rankedChunks;
-  } catch (error) {
-    console.error(
-      "Re-ranking failed, fallback to original order:",
-      error.message,
-    );
-    return chunks;
-  }
-}
-
-function classifyQuery(question) {
-  const wordCount = question.trim().split(/\s+/).length;
-
-  const complexKeywords = [
-    "compare",
-    "difference",
-    "advantages",
-    "disadvantages",
-    "architecture",
-    "how does",
-    "why does",
-    "explain in detail",
-  ];
-
-  const lower = question.toLowerCase();
-
-  if (complexKeywords.some((kw) => lower.includes(kw))) {
-    return "complex";
-  }
-
-  if (wordCount <= 4) return "simple";
-  if (wordCount <= 10) return "medium";
-
-  return "complex";
-}
-
-async function compressChunks(question, chunks) {
-  const tasks = chunks.map((chunk) => {
-    const prompt = `
-Extract only the information from the text that helps answer the question.
-Keep it concise.
-
-Question:
-${question}
-
-Text:
-${chunk.text}
-`;
-
-    return openai.chat.completions.create({
-      model: "openai/gpt-4o-mini",
-      messages: [
-        { role: "system", content: "You compress context." },
-        { role: "user", content: prompt },
-      ],
-      temperature: 0,
-    });
-  });
-
-  const results = await Promise.all(tasks);
-
-  return results.map((r) => ({
-    text: r.choices[0].message.content,
-  }));
-}
-
-function orderContextChunks(chunks) {
-  if (!chunks.length) return [];
-
-  const ordered = [];
-
-  // Primary evidence
-  ordered.push({
-    label: "Primary Evidence",
-    text: chunks[0].text,
-  });
-
-  // Supporting evidence
-  if (chunks[1]) {
-    ordered.push({
-      label: "Supporting Evidence",
-      text: chunks[1].text,
-    });
-  }
-
-  // Background / additional context
-  for (let i = 2; i < chunks.length; i++) {
-    ordered.push({
-      label: "Additional Context",
-      text: chunks[i].text,
-    });
-  }
-
-  return ordered;
 }
