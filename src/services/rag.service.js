@@ -165,7 +165,6 @@ export async function askQuestion(question, sessionId) {
     const completion = await openai.chat.completions.create({
       model,
       messages,
-      stream: true,
     });
 
     const answer = completion.choices[0].message.content;
