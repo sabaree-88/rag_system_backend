@@ -1,19 +1,19 @@
-import { openai } from '../config/openai.js'
+import { openai } from "../config/openai.js";
 
-import { logger } from '../utils/logger.util.js'
+import { logger } from "../utils/logger.util.js";
 
-export async function createEmbedding (text) {
+export async function createEmbedding(text) {
   try {
     const res = await openai.embeddings.create({
-      model: 'text-embedding-3-small',
+      model: "text-embedding-3-small",
 
-      input: text
-    })
+      input: text,
+    });
 
-    return res.data[0].embedding
+    return res.data.map((d) => d.embedding);
   } catch (error) {
-    logger.error('Embedding creation failed', error)
+    logger.error("Embedding creation failed", error);
 
-    throw error
+    throw error;
   }
 }

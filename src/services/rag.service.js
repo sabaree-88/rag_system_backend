@@ -25,100 +25,175 @@ export async function storeDocument(chunk, embedding, source) {
 
 export async function askQuestion(question, sessionId) {
   try {
-    logger.info("Question received");
+    // --------------------------------
+    // 1️⃣ Query Classification
+    // --------------------------------
+    const type = classifyQuery(question);
 
-    // 1. Create embedding
-    // const embedding = await createEmbedding(question);
+    let rerankLimit = 8;
+    let topChunksCount = 2;
 
-    // 2. Vector search
-    // const results = await vectorSearch(embedding, 5);
-
-    // For hybrid search, we can also do a text search and combine results
-    // const results = await hybridSearch(question, embedding, 5);
-
-    // 1️⃣ Generate query variations
-    const queries = await rewriteQuery(question);
-
-    // 2️⃣ Run searches in parallel
-    const allResults = await Promise.all(
-      queries.map(async (q) => {
-        const embedding = await createEmbedding(q);
-        return hybridSearch(q, embedding, 5);
-      }),
-    );
-
-    // 3️⃣ Flatten results
-    const combined = allResults.flat();
-
-    // 4️⃣ Deduplicate by text
-    const uniqueMap = new Map();
-
-    for (const doc of combined) {
-      if (!uniqueMap.has(doc.text)) {
-        uniqueMap.set(doc.text, doc);
-      }
+    if (type === "medium") {
+      rerankLimit = 10;
+      topChunksCount = 3;
     }
 
-    const uniqueResults = Array.from(uniqueMap.values());
+    if (type === "complex") {
+      rerankLimit = 15;
+      topChunksCount = 4;
+    }
 
+    // --------------------------------
+    // 2️⃣ Initial Single Query Retrieval
+    // --------------------------------
 
-    if (!uniqueResults.length) {
+    const initialEmbedding = await createEmbedding([question]);
+
+    const initialResults = await hybridSearch(question, initialEmbedding[0], 5);
+
+    const topScore = initialResults?.[0]?.score || 0;
+
+    let finalResults = initialResults;
+
+    // --------------------------------
+    // 3️⃣ Confidence-Based Escalation
+    // --------------------------------
+    const HIGH_CONF = 0.85;
+    const LOW_CONF = 0.75;
+
+    let rewriteCount = 0;
+
+    if (type === "simple") {
+      if (topScore < LOW_CONF) rewriteCount = 2;
+    }
+
+    if (type === "medium") {
+      if (topScore < LOW_CONF) rewriteCount = 3;
+      else if (topScore < HIGH_CONF) rewriteCount = 2;
+    }
+
+    if (type === "complex") {
+      if (topScore < LOW_CONF) rewriteCount = 5;
+      else rewriteCount = 2;
+    }
+
+    // --------------------------------
+    // 4️⃣ Multi-Query Retrieval
+    // --------------------------------
+    if (rewriteCount > 0) {
+      let queries = await rewriteQuery(question);
+
+      queries = queries.slice(0, rewriteCount);
+
+      const embeddings = await createEmbedding(queries);
+
+      const results = await Promise.all(
+        queries.map((q, i) => hybridSearch(q, embeddings[i], 5)),
+      );
+
+      const merged = [...initialResults, ...results.flat()];
+
+      // Deduplicate
+      const map = new Map();
+
+      for (const doc of merged) {
+        if (!map.has(doc.text)) {
+          map.set(doc.text, doc);
+        }
+      }
+
+      finalResults = Array.from(map.values());
+    }
+
+    if (!finalResults.length) {
       return "No relevant information found.";
     }
 
-    const reranked = await reRankChunks(question, uniqueResults);
+    // --------------------------------
+    // 5️⃣ Reranking
+    // --------------------------------
+    let reranked = finalResults;
 
-    // Select Top 3 most relevant
-    const topChunks = reranked.slice(0, 3);
+    if (type !== "simple") {
+      const limited = finalResults.slice(0, rerankLimit);
 
-    const context = topChunks.map((r) => r.text).join("\n");
+      reranked = await reRankChunks(question, limited);
+    }
 
-    // 3. Load chat memory
+    const topChunks = reranked.slice(0, topChunksCount);
+
+    const compressedChunks = await compressChunks(question, topChunks);
+
+    const orderedChunks = orderContextChunks(compressedChunks);
+
+    // --------------------------------
+    // 6️⃣ Build Context
+    // --------------------------------
+    const context = orderedChunks
+      .map((c, i) => `Chunk ${i + 1}:\n${c.text}`)
+      .join("\n\n");
+
+    // --------------------------------
+    // 7️⃣ Load Memory
+    // --------------------------------
     const previousChats = await Chat.find({ sessionId })
       .sort({ createdAt: 1 })
-      .limit(10);
+      .limit(5);
 
     const memoryMessages = previousChats.map((chat) => ({
       role: chat.role,
       content: chat.content,
     }));
 
-    // 4. Prepare messages
+    // --------------------------------
+    // 8️⃣ Model Selection
+    // --------------------------------
+    let model = "openai/gpt-4o-mini";
+
+    if (type === "complex") {
+      model = "qwen/qwen3.5-35b-a3b";
+    }
+
+    // --------------------------------
+    // 9️⃣ Final LLM Generation
+    // --------------------------------
     const messages = [
       {
         role: "system",
-        content: "Answer using only provided context",
+        content:
+          "Answer the question using only the provided context. If the context is insufficient, say so.",
       },
-
+      {
+        role: "system",
+        content: `Question:\n${question}`,
+      },
       {
         role: "system",
         content: `Context:\n${context}`,
       },
-
       ...memoryMessages,
-
       {
         role: "user",
         content: question,
       },
     ];
 
-    // 5. Call LLM
     const completion = await openai.chat.completions.create({
-      model: "openai/gpt-4o-mini",
+      model,
       messages,
     });
 
     const answer = completion.choices[0].message.content;
 
-    // 6. Save user message
+    // --------------------------------
+    // 🔟 Save Conversation
+    // --------------------------------
     await Chat.create({
       sessionId,
       role: "user",
       content: question,
     });
 
-    // 7. Save assistant reply
     await Chat.create({
       sessionId,
       role: "assistant",
@@ -127,7 +202,7 @@ export async function askQuestion(question, sessionId) {
 
     return answer;
   } catch (error) {
-    logger.error(error);
+    console.error("Error in askQuestion:", error);
     throw error;
   }
 }
@@ -264,4 +339,90 @@ ${formattedChunks}
     );
     return chunks;
   }
+}
+
+function classifyQuery(question) {
+  const wordCount = question.trim().split(/\s+/).length;
+
+  const complexKeywords = [
+    "compare",
+    "difference",
+    "advantages",
+    "disadvantages",
+    "architecture",
+    "how does",
+    "why does",
+    "explain in detail",
+  ];
+
+  const lower = question.toLowerCase();
+
+  if (complexKeywords.some((kw) => lower.includes(kw))) {
+    return "complex";
+  }
+
+  if (wordCount <= 4) return "simple";
+  if (wordCount <= 10) return "medium";
+
+  return "complex";
+}
+
+async function compressChunks(question, chunks) {
+  const tasks = chunks.map((chunk) => {
+    const prompt = `
+Extract only the information from the text that helps answer the question.
+Keep it concise.
+
+Question:
+${question}
+
+Text:
+${chunk.text}
+`;
+
+    return openai.chat.completions.create({
+      model: "openai/gpt-4o-mini",
+      messages: [
+        { role: "system", content: "You compress context." },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0,
+    });
+  });
+
+  const results = await Promise.all(tasks);
+
+  return results.map((r) => ({
+    text: r.choices[0].message.content,
+  }));
+}
+
+function orderContextChunks(chunks) {
+  if (!chunks.length) return [];
+
+  const ordered = [];
+
+  // Primary evidence
+  ordered.push({
+    label: "Primary Evidence",
+    text: chunks[0].text,
+  });
+
+  // Supporting evidence
+  if (chunks[1]) {
+    ordered.push({
+      label: "Supporting Evidence",
+      text: chunks[1].text,
+    });
+  }
+
+  // Background / additional context
+  for (let i = 2; i < chunks.length; i++) {
+    ordered.push({
+      label: "Additional Context",
+      text: chunks[i].text,
+    });
+  }
+
+  return ordered;
 }
