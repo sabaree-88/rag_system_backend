@@ -8,6 +8,8 @@ import { compressChunks, orderContextChunks } from "../utils/chunk.util.js";
 import { reRankChunks } from "./ranking.service.js";
 import { detectPromptInjection } from "./guardrail.service.js";
 import { verifyAnswer } from "./verification.service.js";
+import { getCache, setCache } from "../utils/cache.util.js";
+import { trimContext } from "../utils/tokenGuard.util.js";
 
 const SYSTEM_PROMPT = `
 You are a secure AI assistant.
@@ -25,6 +27,18 @@ Answer Rules:
 - Be concise and factual.
 `;
 
+async function retryLLM(fn, retries = 3) {
+  try {
+    return await fn();
+  } catch (error) {
+    if (retries === 0) throw error;
+
+    await new Promise((r) => setTimeout(r, 1000));
+
+    return retryLLM(fn, retries - 1);
+  }
+}
+
 export async function askQuestion(question, sessionId) {
   try {
     // -----------------------------
@@ -34,13 +48,31 @@ export async function askQuestion(question, sessionId) {
       return "Your request violates security policies.";
     }
 
+    const cacheKey = `qa:${question}`;
+
+    const cached = getCache(cacheKey);
+
+    if (cached) {
+      return cached;
+    }
+
     // --------------------------------
     // 1️⃣ Query Classification
     // --------------------------------
     const type = classifyQuery(question);
 
-    let rerankLimit = 8;
+    let rerankLimit = 6;
     let topChunksCount = 2;
+
+    if (type === "medium") {
+      rerankLimit = 8;
+      topChunksCount = 3;
+    }
+
+    if (type === "complex") {
+      rerankLimit = 12;
+      topChunksCount = 4;
+    }
 
     if (type === "medium") {
       rerankLimit = 10;
@@ -129,7 +161,11 @@ export async function askQuestion(question, sessionId) {
     // --------------------------------
     // 6️⃣ Context Compression
     // --------------------------------
-    const compressedChunks = await compressChunks(question, topChunks);
+    let compressedChunks = topChunks;
+
+    if (type !== "simple") {
+      compressedChunks = await compressChunks(question, topChunks);
+    }
 
     const orderedChunks = orderContextChunks(compressedChunks);
 
@@ -139,6 +175,8 @@ export async function askQuestion(question, sessionId) {
     const context = orderedChunks
       .map((c, i) => `Chunk ${i + 1}:\n${c.text}`)
       .join("\n\n");
+
+    const safeContext = trimContext(context);
 
     // --------------------------------
     // 8️⃣ Load Memory
@@ -184,25 +222,32 @@ Question:
 ${question}
 
 Context:
-${context}
+${safeContext}
 
 Answer:
 `,
       },
     ];
 
-    const completion = await openai.chat.completions.create({
-      model,
-      messages,
-      temperature: 0.2,
-    });
+    const completion = await retryLLM(() =>
+      openai.chat.completions.create({
+        model,
+        messages,
+        temperature: 0.2,
+      }),
+    );
 
     let answer = completion.choices[0].message.content;
 
     // --------------------------------
     // 🧠 Phase 10 Self Verification
     // --------------------------------
-    answer = await verifyAnswer(question, context, answer);
+
+    if (type === "complex") {
+      answer = await verifyAnswer(question, context, answer);
+    }
+
+    setCache(cacheKey, answer, 1800); // cache for 30 mins
 
     // --------------------------------
     // 1️⃣1️⃣ Save Conversation

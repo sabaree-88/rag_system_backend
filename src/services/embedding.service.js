@@ -1,19 +1,31 @@
 import { openai } from "../config/openai.js";
+import {
+  getEmbeddingCache,
+  setEmbeddingCache,
+} from "../utils/embeddingCache.util.js";
 
-import { logger } from "../utils/logger.util.js";
+export async function createEmbedding(texts) {
+  const embeddings = [];
 
-export async function createEmbedding(text) {
-  try {
+  for (const text of texts) {
+    const cached = getEmbeddingCache(text);
+
+    if (cached) {
+      embeddings.push(cached);
+      continue;
+    }
+
     const res = await openai.embeddings.create({
       model: "text-embedding-3-small",
-
       input: text,
     });
 
-    return res.data.map((d) => d.embedding);
-  } catch (error) {
-    logger.error("Embedding creation failed", error);
+    const embedding = res.data[0].embedding;
 
-    throw error;
+    setEmbeddingCache(text, embedding);
+
+    embeddings.push(embedding);
   }
+
+  return embeddings;
 }
