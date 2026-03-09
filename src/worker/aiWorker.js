@@ -1,17 +1,34 @@
 import { Worker } from "bullmq";
-import { askQuestion } from "../services/ask.service.js";
+import { askQuestion } from "../services/rag.service.js";
 import IORedis from "ioredis";
+import { logger } from "../utils/logger.util.js";
 
-const connection = new IORedis();
+try {
+  const connection = new IORedis({
+    host: "localhost",
+    port: 6379,
+    maxRetriesPerRequest: null,
+    retryStrategy(times) {
+      if (times > 3) return null;
+      return Math.min(times * 200, 1000);
+    },
+  });
 
-new Worker(
-  "ai-jobs",
-  async (job) => {
-    const { question, sessionId } = job.data;
+  connection.on("error", () => {});
 
-    const answer = await askQuestion(question, sessionId);
+  await connection.ping();
 
-    return answer;
-  },
-  { connection },
-);
+  new Worker(
+    "ai-jobs",
+    async (job) => {
+      const { question, sessionId } = job.data;
+      const answer = await askQuestion(question, sessionId);
+      return answer;
+    },
+    { connection },
+  );
+
+  logger.info("BullMQ worker started");
+} catch {
+  logger.info("Redis unavailable — worker not started");
+}

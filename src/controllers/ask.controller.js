@@ -8,18 +8,17 @@ export async function ask(req, res, next) {
 
     logger.info("Ask endpoint called");
 
-    const job = await aiQueue.add("ask", {
-      question,
-      sessionId,
-    });
+    // If Redis/BullMQ is available, queue the job
+    if (aiQueue) {
+      const job = await aiQueue.add("ask", { question, sessionId });
+      return res.json({ jobId: job.id, status: "processing" });
+    }
 
-    res.json({
-      jobId: job.id,
-      status: "processing",
-    });
+    // Fallback: process directly without queue
+    const answer = await askQuestion(question, sessionId);
+    res.json({ answer });
   } catch (error) {
     logger.error("Ask controller failed", error);
-
     next(error);
   }
 }
