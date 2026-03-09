@@ -15,7 +15,11 @@ A production-ready Retrieval-Augmented Generation (RAG) system built with Node.j
 - **Conversational Memory**: Maintain chat history for contextual responses
 - **Streaming Responses**: Real-time streaming of LLM responses
 - **Model Selection**: Dynamic model selection based on query complexity
-- **Background Processing**: Asynchronous document embedding via job queues
+- **Asynchronous Processing**: Background document embedding and query processing via BullMQ job queues
+- **Security Guardrails**: Automatic detection and blocking of prompt injection attempts
+- **Self-Verification**: LLM-powered verification layer for complex query accuracy
+- **In-memory Caching**: Fast retrieval for frequent or identical questions
+- **Request Rate Limiting**: Protection against API abuse and cost overruns
 
 ## 🏗️ Architecture
 
@@ -82,6 +86,8 @@ A production-ready Retrieval-Augmented Generation (RAG) system built with Node.j
 - **Embeddings**: OpenAI text-embedding-3-small
 - **PDF Processing**: pdf-parse
 - **File Upload**: Multer
+- **Processing**: BullMQ with Redis (IORedis)
+- **Security**: express-rate-limit for endpoint protection
 - **Tokenization**: GPT Tokenizer
 - **Development**: Nodemon for hot reload
 
@@ -140,7 +146,7 @@ Form Data:
 }
 ```
 
-### Ask Question
+### Ask Question (Asynchronous)
 ```http
 POST /api/ask
 Content-Type: application/json
@@ -154,13 +160,14 @@ Content-Type: application/json
 **Response:**
 ```json
 {
-  "answer": "The main topic is..."
+  "jobId": "123",
+  "status": "processing"
 }
 ```
 
 ### Ask Question (Streaming)
 ```http
-POST /api/ask/stream
+POST /api/ask-stream
 Content-Type: application/json
 
 {
@@ -192,22 +199,30 @@ src/
 ├── models/               # Database schemas
 │   ├── chat.model.js
 │   └── document.model.js
+├── queue/               # BullMQ queue definitions
+│   └── aiQueue.js
 ├── routes/               # API route definitions
 │   ├── ask.routes.js
 │   └── upload.routes.js
 ├── services/             # Business logic services
 │   ├── embedding.service.js
+│   ├── guardrail.service.js
 │   ├── pdf.service.js
 │   ├── queryRewriter.service.js
 │   ├── rag.service.js
 │   ├── ranking.service.js
-│   └── vector.service.js
-└── utils/                # Utility functions
-    ├── chunk.util.js
-    ├── extract.util.js
-    ├── logger.util.js
-    ├── query.util.js
-    └── tokenizer.util.js
+│   ├── vector.service.js
+│   └── verification.service.js
+├── utils/                # Utility functions
+│   ├── cache.util.js
+│   ├── chunk.util.js
+│   ├── extract.util.js
+│   ├── logger.util.js
+│   ├── query.util.js
+│   ├── tokenizer.util.js
+│   └── tokenGuard.util.js
+└── worker/               # Background job workers
+    └── aiWorker.js
 ```
 
 ## 🔄 RAG Pipeline Details

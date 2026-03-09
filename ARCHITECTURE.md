@@ -9,6 +9,10 @@
 ```
 User Question
      ↓
+Guardrail Check (Prompt Injection)
+     ↓
+Query Classification
+     ↓
 Query Rewriting (Multi-Query)
      ↓
 Parallel Embedding Generation
@@ -25,9 +29,13 @@ Context Ordering
      ↓
 Prompt Construction
      ↓
-Streaming LLM Response
+LLM Response Generation
      ↓
-Conversation Memory Storage
+Self-Verification (for Complex Queries)
+     ↓
+Caching & Memory Storage
+     ↓
+Streaming/Final Response
 ```
 
 ---
@@ -48,6 +56,12 @@ This triggers:
 - `rag.service.js`
 
 ---
+
+## 1.5️⃣ Guardrail & Classification Layer
+
+**Guardrails:** Detects prompt injection attempts (e.g., "ignore previous instructions") using `guardrail.service.js`.
+
+**Classification:** Analyzes query complexity (`simple`, `medium`, `complex`) using `query.util.js` to determine search depth and model selection.
 
 ## 2️⃣ Query Rewriting Layer (Multi-Query Retrieval)
 
@@ -284,7 +298,14 @@ User: How does it work in MongoDB?   ← model remembers previous turn
         Ask Controller
                  │
                  ▼
-          RAG Service
+        Guardrail Check
+                 │
+                 ▼
+        Query Classifier
+                 │
+                 ▼
+           RAG Service
+        (Queue if sync)
                  │
                  ▼
         Query Rewriter (LLM)
@@ -297,16 +318,16 @@ User: How does it work in MongoDB?   ← model remembers previous turn
                  │
                  ▼
          Hybrid Retrieval
-       (Vector + Keyword)
+        (Vector + Keyword)
                  │
                  ▼
-       Merge + Deduplicate
+        Merge + Deduplicate
                  │
                  ▼
-           LLM Re-Ranker
+            LLM Re-Ranker
                  │
                  ▼
-        Context Compression
+         Context Compression
                  │
                  ▼
           Context Ordering
@@ -315,11 +336,38 @@ User: How does it work in MongoDB?   ← model remembers previous turn
          Prompt Construction
                  │
                  ▼
-       LLM Streaming Response
+        LLM Response Gen
                  │
                  ▼
-         Memory Persistence
+        Self-Verification
+                 │
+                 ▼
+       Final Response/Stream
+                 │
+                 ▼
+   Memory & Cache Persistence
 ```
+
+---
+
+## 1️⃣3️⃣ Asynchronous Architecture
+
+Standard queries via `/api/ask` are processed asynchronously to handle long-running LLM tasks reliably.
+
+1. **Producer:** `ask.controller.js` adds a job to `aiQueue.js` (BullMQ).
+2. **Queue:** Redis stores the job data and state.
+3. **Consumer:** `aiWorker.js` picks up the job and calls `rag.service.js`.
+4. **Result:** The client receives a `jobId` to poll for status.
+
+*Note: Streaming requests via `/api/ask-stream` bypass the queue for immediate token delivery.*
+
+---
+
+## 1️⃣4️⃣ Security & Reliability
+
+**Rate Limiting:** `rateLimit.middleware.js` limits clients to 20 requests per minute to prevent abuse.
+
+**Self-Verification:** For `complex` queries, the system runs an additional verification step via `verification.service.js`, comparing the generated answer against the context to ensure zero hallucinations.
 
 ---
 
@@ -334,3 +382,8 @@ User: How does it work in MongoDB?   ← model remembers previous turn
 | Context ordering | ✅ |
 | Streaming responses | ✅ |
 | Conversation memory | ✅ |
+| Asynchronous Jobs (BullMQ) | ✅ |
+| Security Guardrails | ✅ |
+| Self-Verification | ✅ |
+| In-memory Caching | ✅ |
+| Rate Limiting | ✅ |
