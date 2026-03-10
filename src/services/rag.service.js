@@ -85,16 +85,25 @@ async function prepareRAGContext(question, sessionId) {
   if (rewriteCount > 0) {
     let queries = await rewriteQuery(question);
     queries = queries.slice(0, rewriteCount);
-    const embeddings = await createEmbedding(queries);
-    const results = await Promise.all(
-      queries.map((q, i) => hybridSearch(q, embeddings[i], 5)),
-    );
-    const merged = [...initialResults, ...results.flat()];
-    const map = new Map();
-    for (const doc of merged) {
-      if (!map.has(doc.text)) map.set(doc.text, doc);
+    
+    if (!queries || queries.length === 0) {
+      console.warn("No rewritten queries generated, skipping multi-query retrieval");
+    } else {
+      try {
+        const embeddings = await createEmbedding(queries);
+        const results = await Promise.all(
+          queries.map((q, i) => hybridSearch(q, embeddings[i], 5)),
+        );
+        const merged = [...initialResults, ...results.flat()];
+        const map = new Map();
+        for (const doc of merged) {
+          if (!map.has(doc.text)) map.set(doc.text, doc);
+        }
+        finalResults = Array.from(map.values());
+      } catch (embeddingError) {
+        console.error("Error in multi-query retrieval, falling back to initial results:", embeddingError);
+      }
     }
-    finalResults = Array.from(map.values());
   }
 
   if (!finalResults.length) {

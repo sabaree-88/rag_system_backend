@@ -16,9 +16,15 @@ export async function createEmbedding(texts) {
     }
 
     const res = await openai.embeddings.create({
-      model: "text-embedding-3-small",
+      model: "openai/text-embedding-3-small",
       input: text,
     });
+
+    if (!res.data || !res.data[0] || !res.data[0].embedding) {
+      throw new Error(
+        `Invalid embedding response for text: "${text}". Response: ${JSON.stringify(res)}`
+      );
+    }
 
     const embedding = res.data[0].embedding;
 
