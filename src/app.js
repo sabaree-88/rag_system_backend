@@ -8,6 +8,9 @@ import { errorMiddleware } from './middleware/error.middleware.js'
 
 const app = express()
 
+// Trust proxy for rate limiting (important for cloud deployments like Render)
+app.set('trust proxy', 1)
+
 app.use(express.json())
 
 app.get('/health', (req, res) => {
